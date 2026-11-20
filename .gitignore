@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 testbed_outputs.json
 docs/builder_center_article.md
+docs/screenshots/
+*.jpg
+*.png
