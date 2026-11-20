@@ -13,11 +13,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Ensure repository root is on sys.path regardless of execution directory
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 import boto3
 from botocore.exceptions import ClientError
