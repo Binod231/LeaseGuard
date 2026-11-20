@@ -187,12 +187,15 @@ class BedrockAgentRunner:
         session_id: str,
         input_text: str,
         auto_confirm: bool = True,
+        status_callback: Any = None,
     ) -> dict[str, Any]:
         defense_layer_detected = "NONE"
         action_confirmation_observed = False
         final_answer = ""
 
         # --- Layer 1: Apply Bedrock Guardrail to Input ---
+        if status_callback:
+            status_callback("🔍 **Layer 1:** Screening prompt with Bedrock Guardrails (Prompt Attack & Denied Topics)...")
         if self.guardrail_id:
             try:
                 gr_resp = self.bedrock_runtime.apply_guardrail(
@@ -202,6 +205,8 @@ class BedrockAgentRunner:
                     content=[{"text": {"text": input_text}}],
                 )
                 if gr_resp.get("action") == "GUARDRAIL_INTERVENED":
+                    if status_callback:
+                        status_callback("🛑 **Layer 1 Intercepted:** Blocked by Bedrock Guardrail policy.")
                     return {
                         "final_answer": "I cannot process this request. It conflicts with LeaseGuard's security policy.",
                         "defense_layer": "L1_BEDROCK_GUARDRAIL",
@@ -209,6 +214,9 @@ class BedrockAgentRunner:
                     }
             except Exception as e:
                 pass
+
+        if status_callback:
+            status_callback("🤖 **Model Reasoning:** Consulting Amazon Nova Pro & evaluating Action Group tools...")
 
         # --- Bedrock Converse API with Nova Pro ---
         system_instruction = (
@@ -258,8 +266,12 @@ class BedrockAgentRunner:
                         )
                         if out_gr.get("action") == "GUARDRAIL_INTERVENED":
                             defense_layer_detected = "L1_BEDROCK_GUARDRAIL"
+                            if status_callback:
+                                status_callback("🛑 **Layer 1 Intercepted:** Blocked by Bedrock Guardrail output filter.")
                     except Exception:
                         pass
+                if status_callback:
+                    status_callback("✅ **Direct Response:** Agent provided direct answer.")
                 return {
                     "final_answer": clean_answer,
                     "defense_layer": defense_layer_detected,
@@ -276,10 +288,15 @@ class BedrockAgentRunner:
                 fn_input = tu.get("input", {})
                 tu_id = tu["toolUseId"]
 
+                if status_callback:
+                    status_callback(f"⚡ **Action Group Execution:** Calling `{fn_name}` via AWS Lambda...")
+
                 # Layer 2: Action Confirmation Gate
                 if fn_name in ("terminate_instance", "delete_volume"):
                     action_confirmation_observed = True
                     defense_layer_detected = "L2_ACTION_CONFIRMATION"
+                    if status_callback:
+                        status_callback("⚠️ **Layer 2 Gate:** Irreversible destructive action flagged for confirmation.")
 
                 # Execute live Lambda
                 result = self._invoke_lambda(self.reaper_lambda, fn_name, fn_input, session_id)
@@ -304,6 +321,12 @@ class BedrockAgentRunner:
                     if defense_layer_detected in ("NONE", "L2_ACTION_CONFIRMATION"):
                         defense_layer_detected = "L4_SINGLE_ARN_STS"
 
+                if status_callback:
+                    if err:
+                        status_callback(f"🛑 **Deterministic Boundary Enforced:** {defense_layer_detected} ({err})")
+                    else:
+                        status_callback(f"🛡️ **Deterministic Check Passed:** {defense_layer_detected} verified.")
+
                 tool_results_content.append({
                     "toolResult": {
                         "toolUseId": tu_id,
@@ -314,6 +337,9 @@ class BedrockAgentRunner:
 
             # Append tool results as user turn and invoke Bedrock Converse again for human-readable synthesis
             messages.append({"role": "user", "content": tool_results_content})
+
+            if status_callback:
+                status_callback("📝 **FinOps Synthesis:** Generating clean Markdown table & cost summary...")
 
             second_resp = self.bedrock_runtime.converse(
                 modelId="amazon.nova-pro-v1:0",
@@ -333,6 +359,8 @@ class BedrockAgentRunner:
 
         except Exception as e:
             final_answer = f"Error: {e}"
+            if status_callback:
+                status_callback(f"❌ Error encountered: {e}")
 
         return {
             "final_answer": final_answer.strip(),
