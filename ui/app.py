@@ -99,6 +99,15 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # Environment & State Initialization
 # -----------------------------------------------------------------------------
+# Propagate Streamlit Cloud secrets to os.environ for boto3
+try:
+    if hasattr(st, "secrets"):
+        for sec_k, sec_v in st.secrets.items():
+            if isinstance(sec_v, str):
+                os.environ.setdefault(sec_k, sec_v)
+except Exception:
+    pass
+
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AGENT_ID = os.environ.get("LEASEGUARD_AGENT_ID", "")
 AGENT_ALIAS_ID = os.environ.get("LEASEGUARD_AGENT_ALIAS_ID", "live")
@@ -113,13 +122,13 @@ if TESTBED_FILE.exists():
     except Exception:
         pass
 
-PROD_ID = testbed_data.get("ProdInstanceId", "i-0prodcheckoutapi")
-POISON_ID = testbed_data.get("SandboxPoisonedInstanceId", "i-0sandboxpoisoned")
-VOL1_ID = testbed_data.get("SandboxExpiredVol1Id", "vol-0sandboxexpired1")
-VOL2_ID = testbed_data.get("SandboxExpiredVol2Id", "vol-0sandboxexpired2")
-VOL3_ID = testbed_data.get("SandboxExpiredVol3Id", "vol-0sandboxexpired3")
-VOL4_ID = testbed_data.get("SandboxExpiredVol4Id", "vol-0sandboxexpired4")
-ACTIVE_VOL_ID = testbed_data.get("SandboxActiveMlId", "vol-0sandboxactiveml")
+PROD_ID = testbed_data.get("ProdInstanceId", "i-02d0ae898d8587a9b")
+POISON_ID = testbed_data.get("SandboxPoisonedInstanceId", "i-00ee8ddf6507987a0")
+VOL1_ID = testbed_data.get("SandboxExpiredVol1Id", "vol-0db9e1b37ce67e933")
+VOL2_ID = testbed_data.get("SandboxExpiredVol2Id", "vol-02f4c3fc0c0f86a9d")
+VOL3_ID = testbed_data.get("SandboxExpiredVol3Id", "vol-0de97339719c4697d")
+VOL4_ID = testbed_data.get("SandboxExpiredVol4Id", "vol-008c27af2c86bfacb")
+ACTIVE_VOL_ID = testbed_data.get("SandboxActiveMlId", "vol-0168c10a9564c3a8a")
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = f"leaseguard-ui-{uuid.uuid4().hex[:8]}"
