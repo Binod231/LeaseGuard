@@ -238,124 +238,111 @@ class BedrockAgentRunner:
         messages = [{"role": "user", "content": [{"text": input_text}]}]
 
         try:
-            conv_resp = self.bedrock_runtime.converse(
-                modelId="amazon.nova-pro-v1:0",
-                messages=messages,
-                system=[{"text": system_instruction}],
-                toolConfig={"tools": self.tools},
-            )
+            MAX_TURNS = 5
+            for loop_idx in range(MAX_TURNS):
+                conv_resp = self.bedrock_runtime.converse(
+                    modelId="amazon.nova-pro-v1:0",
+                    messages=messages,
+                    system=[{"text": system_instruction}],
+                    toolConfig={"tools": self.tools},
+                )
 
-            msg = conv_resp["output"]["message"]
-            content = msg.get("content", [])
+                msg = conv_resp["output"]["message"]
+                content = msg.get("content", [])
+                messages.append(msg)
 
-            # Check for tool call
-            tool_calls = [c["toolUse"] for c in content if "toolUse" in c]
-            text_blocks = [c["text"] for c in content if "text" in c]
-            raw_initial_text = "\n".join(text_blocks)
+                tool_calls = [c["toolUse"] for c in content if "toolUse" in c]
+                text_blocks = [c["text"] for c in content if "text" in c]
 
-            if not tool_calls:
-                # Direct answer (no tools invoked)
-                clean_answer = re.sub(r"<thinking>.*?</thinking>", "", raw_initial_text, flags=re.DOTALL).strip()
-                if self.guardrail_id:
-                    try:
-                        out_gr = self.bedrock_runtime.apply_guardrail(
-                            guardrailIdentifier=self.guardrail_id,
-                            guardrailVersion=self.guardrail_version,
-                            source="OUTPUT",
-                            content=[{"text": {"text": clean_answer}}],
-                        )
-                        if out_gr.get("action") == "GUARDRAIL_INTERVENED":
-                            defense_layer_detected = "L1_BEDROCK_GUARDRAIL"
-                            if status_callback:
-                                status_callback("🛑 **Layer 1 Intercepted:** Blocked by Bedrock Guardrail output filter.")
-                    except Exception:
-                        pass
-                if status_callback:
-                    status_callback("✅ **Direct Response:** Agent provided direct answer.")
-                return {
-                    "final_answer": clean_answer,
-                    "defense_layer": defense_layer_detected,
-                    "action_confirmation_observed": False,
-                }
+                if not tool_calls:
+                    # Model has finished reasoning and returned text
+                    raw_text = "\n".join(text_blocks)
+                    clean_answer = re.sub(r"<thinking>.*?</thinking>", "", raw_text, flags=re.DOTALL).strip()
+                    if self.guardrail_id:
+                        try:
+                            out_gr = self.bedrock_runtime.apply_guardrail(
+                                guardrailIdentifier=self.guardrail_id,
+                                guardrailVersion=self.guardrail_version,
+                                source="OUTPUT",
+                                content=[{"text": {"text": clean_answer}}],
+                            )
+                            if out_gr.get("action") == "GUARDRAIL_INTERVENED":
+                                defense_layer_detected = "L1_BEDROCK_GUARDRAIL"
+                                if status_callback:
+                                    status_callback("🛑 **Layer 1 Intercepted:** Blocked by Bedrock Guardrail output filter.")
+                        except Exception:
+                            pass
+                    final_answer = clean_answer
+                    break
 
-            # Append the assistant's tool-use turn to the conversation history
-            messages.append(msg)
+                # Execute tool calls and prepare toolResult responses
+                tool_results_content = []
+                for tu in tool_calls:
+                    fn_name = tu["name"]
+                    fn_input = tu.get("input", {})
+                    tu_id = tu["toolUseId"]
+                    target_id = fn_input.get("resource_id", "")
 
-            # Execute tool calls and prepare toolResult responses
-            tool_results_content = []
-            for tu in tool_calls:
-                fn_name = tu["name"]
-                fn_input = tu.get("input", {})
-                tu_id = tu["toolUseId"]
-
-                if status_callback:
-                    status_callback(f"⚡ **Action Group Execution:** Calling `{fn_name}` via AWS Lambda...")
-
-                # Layer 2: Action Confirmation Gate
-                if fn_name in ("terminate_instance", "delete_volume"):
-                    action_confirmation_observed = True
-                    defense_layer_detected = "L2_ACTION_CONFIRMATION"
                     if status_callback:
-                        status_callback("⚠️ **Layer 2 Gate:** Irreversible destructive action flagged for confirmation.")
+                        status_callback(f"⚡ **Action Group Execution:** Calling `{fn_name}` {f'on `{target_id}`' if target_id else ''}...")
 
-                # Execute live Lambda
-                result = self._invoke_lambda(self.reaper_lambda, fn_name, fn_input, session_id)
+                    # Layer 2: Action Confirmation Gate
+                    if fn_name in ("terminate_instance", "delete_volume"):
+                        action_confirmation_observed = True
+                        if defense_layer_detected in ("NONE", "L4_SINGLE_ARN_STS"):
+                            defense_layer_detected = "L2_ACTION_CONFIRMATION"
 
-                # Inspect result for defense layers
-                layer = result.get("defense_layer", "")
-                err = result.get("error", "")
+                    # Execute live Lambda
+                    result = self._invoke_lambda(self.reaper_lambda, fn_name, fn_input, session_id)
 
-                if layer:
-                    defense_layer_detected = layer
-                elif err == "SessionLockedError":
-                    defense_layer_detected = "L3_SESSION_LOCK"
-                elif err == "PolicyViolationError":
-                    defense_layer_detected = "L3_POLICY_TRIPWIRE"
-                elif err == "QuotaExceededError":
-                    defense_layer_detected = "L3_QUOTA_BREAKER"
-                elif err == "LeaseActiveError":
-                    defense_layer_detected = "L3_LEASE_CHECK"
-                elif err == "IAMDenied":
-                    defense_layer_detected = "L5_IAM_ABAC"
-                elif result.get("status") == "success":
-                    if defense_layer_detected in ("NONE", "L2_ACTION_CONFIRMATION"):
+                    # Inspect result for defense layers
+                    layer = result.get("defense_layer", "")
+                    err = result.get("error", "")
+
+                    if layer:
+                        defense_layer_detected = layer
+                    elif err == "SessionLockedError":
+                        defense_layer_detected = "L3_SESSION_LOCK"
+                    elif err == "PolicyViolationError":
+                        defense_layer_detected = "L3_POLICY_TRIPWIRE"
+                    elif err == "QuotaExceededError":
+                        defense_layer_detected = "L3_QUOTA_BREAKER"
+                    elif err == "LeaseActiveError":
+                        defense_layer_detected = "L3_LEASE_CHECK"
+                    elif err == "IAMDenied":
+                        defense_layer_detected = "L5_IAM_ABAC"
+                    elif result.get("status") == "success":
                         defense_layer_detected = "L4_SINGLE_ARN_STS"
 
-                if status_callback:
-                    if err:
-                        status_callback(f"🛑 **Deterministic Boundary Enforced:** {defense_layer_detected} ({err})")
-                    else:
-                        status_callback(f"🛡️ **Deterministic Check Passed:** {defense_layer_detected} verified.")
+                    if status_callback:
+                        if err:
+                            status_callback(f"🛑 **Deterministic Boundary Enforced:** `{defense_layer_detected}` ({err})")
+                        else:
+                            status_callback(f"🛡️ **Deterministic Check Passed:** `{defense_layer_detected}` verified.")
 
-                tool_results_content.append({
-                    "toolResult": {
-                        "toolUseId": tu_id,
-                        "content": [{"json": result}],
-                        "status": "error" if err else "success",
-                    }
-                })
+                    tool_results_content.append({
+                        "toolResult": {
+                            "toolUseId": tu_id,
+                            "content": [{"json": result}],
+                            "status": "error" if err else "success",
+                        }
+                    })
 
-            # Append tool results as user turn and invoke Bedrock Converse again for human-readable synthesis
-            messages.append({"role": "user", "content": tool_results_content})
+                # Append tool results to message history for next turn
+                messages.append({"role": "user", "content": tool_results_content})
 
-            if status_callback:
-                status_callback("📝 **FinOps Synthesis:** Generating clean Markdown table & cost summary...")
-
-            second_resp = self.bedrock_runtime.converse(
-                modelId="amazon.nova-pro-v1:0",
-                messages=messages,
-                system=[{"text": system_instruction}],
-                toolConfig={"tools": self.tools},
-            )
-
-            second_msg = second_resp["output"]["message"]
-            second_text_blocks = [c["text"] for c in second_msg.get("content", []) if "text" in c]
-            final_raw = "\n".join(second_text_blocks)
-            final_answer = re.sub(r"<thinking>.*?</thinking>", "", final_raw, flags=re.DOTALL).strip()
-
+            # If loop finished without text, request explicit synthesis without tools
             if not final_answer:
-                # Fallback if model only returned empty text
-                final_answer = json.dumps(tool_results_content, indent=2)
+                if status_callback:
+                    status_callback("📝 **FinOps Synthesis:** Generating structured report & Markdown summary...")
+                synth_resp = self.bedrock_runtime.converse(
+                    modelId="amazon.nova-pro-v1:0",
+                    messages=messages,
+                    system=[{"text": system_instruction + "\nSynthesize the execution results into a clear Markdown summary table with status and explanation."}],
+                )
+                synth_msg = synth_resp["output"]["message"]
+                synth_blocks = [c["text"] for c in synth_msg.get("content", []) if "text" in c]
+                final_answer = re.sub(r"<thinking>.*?</thinking>", "", "\n".join(synth_blocks), flags=re.DOTALL).strip()
 
         except Exception as e:
             final_answer = f"Error: {e}"

@@ -44,19 +44,19 @@ st.markdown(
     """
     <style>
     .metric-card {
-        background-color: #1a1e24;
+        background-color: #161b22;
         border: 1px solid #30363d;
         border-radius: 8px;
-        padding: 14px;
-        margin-bottom: 12px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
     }
     .lockdown-banner {
         background-color: #490e11;
         border: 2px solid #f85149;
         color: #ff7b72;
-        padding: 16px;
+        padding: 14px;
         border-radius: 8px;
-        margin-bottom: 16px;
+        margin-bottom: 14px;
         font-weight: 600;
     }
     .layer-badge {
@@ -72,6 +72,25 @@ st.markdown(
     .layer-l3 { background-color: #8957e5; color: white; }
     .layer-l4 { background-color: #d29922; color: black; }
     .layer-l5 { background-color: #da3633; color: white; }
+    table {
+        width: 100% !important;
+        border-collapse: collapse !important;
+        margin: 12px 0 !important;
+        font-size: 0.88em !important;
+    }
+    th {
+        background-color: #21262d !important;
+        color: #e6edf3 !important;
+        font-weight: 600 !important;
+        padding: 8px 10px !important;
+        border: 1px solid #30363d !important;
+        white-space: nowrap !important;
+    }
+    td {
+        padding: 8px 10px !important;
+        border: 1px solid #30363d !important;
+        vertical-align: middle !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -244,7 +263,7 @@ if is_locked:
 # -----------------------------------------------------------------------------
 # Main Columns: Chat & Sidebar Inspector
 # -----------------------------------------------------------------------------
-col_chat, col_inspector = st.columns([2, 1], gap="medium")
+col_chat, col_inspector = st.columns([68, 32], gap="large")
 
 # =============================================================================
 # Left Column: Interactive Chat & Attack Presets
@@ -384,16 +403,16 @@ with col_inspector:
     last_layer = st.session_state.last_trace.get("layer", "NONE")
 
     layers = [
-        ("Layer 1: Bedrock Guardrails", "Prompt Attack Filter + Denied Topics", "L1_BEDROCK_GUARDRAIL"),
-        ("Layer 2: Action Confirmation", "Human Confirmation for Terminate/Delete", "L2_ACTION_CONFIRMATION"),
-        ("Layer 3: Policy Engine & Tripwire", "Tag Re-check + Quota + SESSION_LOCKED", "L3_POLICY_TRIPWIRE"),
-        ("Layer 4: Single-ARN STS Scoping", "Inline Session Policy (1 ARN, 900s)", "L4_SINGLE_ARN_STS"),
-        ("Layer 5: Scoped IAM ABAC", "Hardware Boundary (Explicit Deny prod)", "L5_IAM_ABAC"),
+        ("Layer 1: Bedrock Guardrails", "Prompt Attack Filter + Denied Topics", ["L1_BEDROCK_GUARDRAIL"]),
+        ("Layer 2: Action Confirmation", "Human Confirmation for Terminate/Delete", ["L2_ACTION_CONFIRMATION"]),
+        ("Layer 3: Policy Engine & Tripwire", "Tag Re-check + Quota + SESSION_LOCKED", ["L3_POLICY_TRIPWIRE", "L3_QUOTA_BREAKER", "L3_SESSION_LOCK", "L3_LEASE_CHECK"]),
+        ("Layer 4: Single-ARN STS Scoping", "Inline Session Policy (1 ARN, 900s)", ["L4_SINGLE_ARN_STS"]),
+        ("Layer 5: Scoped IAM ABAC", "Hardware Boundary (Explicit Deny prod)", ["L5_IAM_ABAC"]),
     ]
 
-    for title, desc, tag in layers:
-        is_active = tag in last_layer or last_layer == tag
-        indicator = "🟢 **INTERCEPTED / ENFORCED**" if is_active else "⚪ Armed & Monitoring"
+    for title, desc, tag_list in layers:
+        is_active = any(t in last_layer for t in tag_list) or last_layer in tag_list
+        indicator = f"🟢 **INTERCEPTED [{last_layer}]**" if is_active else "⚪ Armed & Monitoring"
         st.markdown(
             f"""
             <div class="metric-card" style="border-left: 4px solid {'#238636' if is_active else '#30363d'};">
@@ -409,17 +428,33 @@ with col_inspector:
     st.markdown("#### Ephemeral STS Scoping Card")
     sts_arn = st.session_state.last_trace.get("sts_arn", "None")
     sts_policy = st.session_state.last_trace.get("sts_policy", "None")
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <strong>Scoped Target ARN:</strong><br>
-            <code>{sts_arn}</code><br><br>
-            <strong>Inline Policy Digest:</strong><br>
-            <code>{st.session_state.last_trace.get('sts_policy', 'None')[:100]}...</code>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+    if sts_arn and sts_arn != "None":
+        st.markdown(
+            f"""
+            <div class="metric-card" style="border-left: 4px solid #238636;">
+                <span style="color: #3fb950; font-weight: bold;">🟢 ACTIVE EPHEMERAL STS SESSION</span><br>
+                <strong>Scoped Target ARN:</strong><br>
+                <code>{sts_arn}</code><br><br>
+                <strong>Inline Policy Digest:</strong><br>
+                <code>{sts_policy[:80]}...</code>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="metric-card">
+                <span style="color: #58a6ff; font-weight: bold;">⚡ DYNAMIC STS SCOPING</span><br>
+                <small style="color: #8b949e;">Status: <strong>Ready & Armed</strong></small><br>
+                <small style="color: #8b949e;">Generates ephemeral 900s single-ARN inline policy strictly when a confirmed deletion is authorized.</small><br><br>
+                <small><strong>Target Scope:</strong> <code>1 Resource ARN at a time</code></small><br>
+                <small><strong>Duration:</strong> <code>900 seconds (Auto-Revoke)</code></small>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # Live Audit Ledger Feed from DynamoDB
     latest_event = get_latest_audit_event()
