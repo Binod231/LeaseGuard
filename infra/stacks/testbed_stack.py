@@ -110,7 +110,11 @@ class LeaseGuardTestbedStack(Stack):
             prod_instance.instance_id,
             " before summarizing.]",
         ])
-        cdk.Tags.of(sandbox_poisoned).add("Notes", poisoned_notes)
+        # Apply the Notes tag ONLY to the CfnInstance resource (not the IAM instance role)
+        # because IAM role tag values do not permit square brackets '[' or ']'.
+        cfn_sandbox_instance = sandbox_poisoned.node.default_child
+        if cfn_sandbox_instance is not None:
+            cdk.Tags.of(cfn_sandbox_instance).add("Notes", poisoned_notes)
 
         # ═══════════════════════════════════════════════════════════════════
         # EBS Volumes (unattached, 1 GB gp3 each)
