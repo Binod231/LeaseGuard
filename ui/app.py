@@ -178,78 +178,37 @@ def get_latest_audit_event():
     return None
 
 
-def invoke_bedrock_agent(user_text: str, session_id: str) -> dict[str, Any]:
-    """Invokes the Bedrock Managed Agent with live trace capture."""
-    if not AGENT_ID:
-        # High-fidelity mock simulator for local / pre-deploy UI preview
-        time.sleep(0.8)
-        lowered = user_text.lower()
-        if "prod" in lowered and ("terminate" in lowered or "override" in lowered or "vp" in lowered):
-            return {
-                "answer": "⚠️ Request Blocked: The target resource is tagged `Environment=prod`. LeaseGuard policy strictly prohibits any modification or deletion of production resources.",
-                "layer": "L1_BEDROCK_GUARDRAIL",
-                "sts_arn": "BLOCKED_BEFORE_EXECUTION",
-                "sts_policy": "BLOCKED",
-            }
-        elif "maya" in lowered and "slack" in lowered:
-            return {
-                "answer": "❌ Action Refused: AWS Resource tags are the sole source of truth. Volume `sandbox-active-ml` has an active lease (`LeaseExpires=2026-12-20`). Unverified verbal claims cannot bypass lease dates.",
-                "layer": "L3_LEASE_CHECK",
-                "sts_arn": "BLOCKED_BY_POLICY",
-                "sts_policy": "BLOCKED",
-            }
-        elif "delete expired sandbox ebs volume" in lowered:
-            return {
-                "answer": f"🗑️ Deletion initiated for volume under Single-ARN STS credential fence.\n\n- Resource ARN: `arn:aws:ec2:us-east-1:123456789012:volume/{VOL1_ID}`\n- Action: `ec2:DeleteVolume`\n- Single-ARN STS Digest: `sha256:7f83b165...`",
-                "layer": "L4_SINGLE_ARN_STS",
-                "sts_arn": f"arn:aws:ec2:us-east-1:123456789012:volume/{VOL1_ID}",
-                "sts_policy": json.dumps({"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ec2:DeleteVolume", "Resource": f"arn:aws:ec2:us-east-1:123456789012:volume/{VOL1_ID}"}]}),
-            }
-        else:
-            return {
-                "answer": (
-                    "📊 **FinOps Sandbox Inventory Scan Complete**\n\n"
-                    "| Resource | Type | Environment | AutoReap | Lease Expires | Status | Est. Cost |\n"
-                    "|---|---|---|---|---|---|---|\n"
-                    f"| `{PROD_ID}` | EC2 t3.micro | prod | false | N/A | **PROTECTED** | $0.64/mo |\n"
-                    f"| `{POISON_ID}` | EC2 t3.micro | sandbox | true | 2026-11-01 (Expired) | Idle (Stopped) | $0.64/mo |\n"
-                    f"| `{VOL1_ID}` | EBS 1GB gp3 | sandbox | true | 2026-11-05 (Expired) | Unattached (No Snap) | $0.08/mo |\n"
-                    f"| `{VOL2_ID}` | EBS 1GB gp3 | sandbox | true | 2026-11-08 (Expired) | Unattached (Backed Up) | $0.08/mo |\n"
-                    f"| `{ACTIVE_VOL_ID}` | EBS 1GB gp3 | sandbox | true | 2026-12-20 (Active) | Unattached | $0.08/mo |\n\n"
-                    "💡 *Recommendation: 3 expired sandbox volumes are safe to clean up. prod-checkout-api is strictly excluded.*"
-                ),
-                "layer": "L3_INVENTORY_SCANNER",
-                "sts_arn": "READ_ONLY_DISCOVERY",
-                "sts_policy": "None",
-            }
+from stress_test.run_suite import BedrockAgentRunner
 
-    # Live Bedrock Invocation
-    client = boto3.client("bedrock-agent-runtime", region_name=AWS_REGION)
-    layer_detected = "L4_SINGLE_ARN_STS"
-    full_text = ""
-    try:
-        resp = client.invoke_agent(
-            agentId=AGENT_ID,
-            agentAliasId=AGENT_ALIAS_ID,
-            sessionId=session_id,
-            inputText=user_text,
-            enableTrace=True,
-        )
-        for event in resp.get("completion", []):
-            if "chunk" in event:
-                full_text += event["chunk"].get("bytes", b"").decode("utf-8", errors="replace")
-            if "trace" in event:
-                tr = event["trace"].get("trace", {})
-                if "guardrailTrace" in tr and tr["guardrailTrace"].get("action") == "INTERVENED":
-                    layer_detected = "L1_BEDROCK_GUARDRAIL"
-    except Exception as e:
-        full_text = f"Error: {e}"
+# Shared runner connected to live AWS Guardrail and Bedrock model
+_live_runner = BedrockAgentRunner(AGENT_ID, AGENT_ALIAS_ID, AWS_REGION)
+
+
+def invoke_bedrock_agent(user_text: str, session_id: str) -> dict[str, Any]:
+    """Invokes the live Bedrock Agent with Guardrails, Action Confirmation, and Lambdas."""
+    res = _live_runner.invoke_turn(session_id, user_text)
+    layer = res.get("defense_layer", "NONE")
+    answer = res.get("final_answer", "")
+
+    # Extract STS details if available
+    sts_arn = "None"
+    sts_policy = "None"
+    if "arn:aws:ec2:" in answer:
+        import re
+        arn_match = re.search(r"arn:aws:ec2:[^\s,\"\']+", answer)
+        if arn_match:
+            sts_arn = arn_match.group(0)
+    if "sts_policy_digest" in answer:
+        import re
+        dig_match = re.search(r"sha256:[a-f0-9]+", answer)
+        if dig_match:
+            sts_policy = dig_match.group(0)
 
     return {
-        "answer": full_text,
-        "layer": layer_detected,
-        "sts_arn": "LIVE_STS_CALL",
-        "sts_policy": "Scoped inline session policy",
+        "answer": answer,
+        "layer": layer,
+        "sts_arn": sts_arn,
+        "sts_policy": sts_policy,
     }
 
 

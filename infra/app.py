@@ -13,6 +13,9 @@ security_mode = app.node.try_get_context("security_mode") or "v2"
 foundation_model_id = (
     app.node.try_get_context("foundation_model_id") or "amazon.nova-pro-v1:0"
 )
+deploy_classic_agent = (
+    app.node.try_get_context("deploy_classic_agent") == "true"
+)
 
 account = (
     os.environ.get("CDK_DEFAULT_ACCOUNT")
@@ -28,6 +31,7 @@ agent_stack = LeaseGuardStack(
     "LeaseGuardStack",
     security_mode=security_mode,
     foundation_model_id=foundation_model_id,
+    deploy_classic_agent=deploy_classic_agent,
     env=env,
 )
 

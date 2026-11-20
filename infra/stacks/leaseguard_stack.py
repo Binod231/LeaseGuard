@@ -39,6 +39,7 @@ class LeaseGuardStack(Stack):
         *,
         security_mode: str = "v2",
         foundation_model_id: str = "amazon.nova-pro-v1:0",
+        deploy_classic_agent: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -462,179 +463,183 @@ class LeaseGuardStack(Stack):
             "session."
         )
 
-        agent = bedrock.CfnAgent(
-            self,
-            "Agent",
-            agent_name="LeaseGuard",
-            description=(
-                "FinOps Triage & Autonomous Sandbox Cost-Reaper Agent "
-                "with 5-layer defence-in-depth."
-            ),
-            agent_resource_role_arn=agent_role.role_arn,
-            foundation_model=foundation_model_id,
-            instruction=agent_instruction,
-            idle_session_ttl_in_seconds=1800,
-            auto_prepare=True,
-            guardrail_configuration=bedrock.CfnAgent.GuardrailConfigurationProperty(
-                guardrail_identifier=guardrail.attr_guardrail_id,
-                guardrail_version=guardrail_version.attr_version,
-            ),
-            action_groups=[
-                # --- Action Group 1: Inventory (read-only) ---
-                bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="LeaseGuardInventory",
-                    description=(
-                        "Read-only FinOps inventory scanning and triage. "
-                        "No mutations."
-                    ),
-                    action_group_executor=bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=inventory_lambda.function_arn,
-                    ),
-                    function_schema=bedrock.CfnAgent.FunctionSchemaProperty(
-                        functions=[
-                            bedrock.CfnAgent.FunctionProperty(
-                                name="triage_idle_resources",
-                                description=(
-                                    "Scan and triage idle/expired EC2 "
-                                    "instances and unattached EBS volumes. "
-                                    "Returns estimated monthly waste, days "
-                                    "past/until lease expiry, snapshot "
-                                    "backup status, owner, and team. "
-                                    "Read-only — no mutations."
-                                ),
-                                parameters={
-                                    "filter_environment": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="string",
-                                        description=(
-                                            "Optional. Filter by Environment "
-                                            "tag value (e.g. sandbox)."
-                                        ),
-                                        required=False,
-                                    ),
-                                    "filter_owner": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="string",
-                                        description=(
-                                            "Optional. Filter by Owner tag."
-                                        ),
-                                        required=False,
-                                    ),
-                                    "include_snapshots": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="boolean",
-                                        description=(
-                                            "Whether to check for existing "
-                                            "EBS snapshots. Default true."
-                                        ),
-                                        required=False,
-                                    ),
-                                },
-                                require_confirmation="DISABLED",
-                            ),
-                        ]
-                    ),
+        if deploy_classic_agent:
+            agent = bedrock.CfnAgent(
+                self,
+                "Agent",
+                agent_name="LeaseGuard",
+                description=(
+                    "FinOps Triage & Autonomous Sandbox Cost-Reaper Agent "
+                    "with 5-layer defence-in-depth."
                 ),
-                # --- Action Group 2: Reaper (read/write) ---
-                bedrock.CfnAgent.AgentActionGroupProperty(
-                    action_group_name="LeaseGuardReaper",
-                    description=(
-                        "Sandbox resource lifecycle operations: stop, "
-                        "terminate, delete, and security status."
-                    ),
-                    action_group_executor=bedrock.CfnAgent.ActionGroupExecutorProperty(
-                        lambda_=reaper_lambda.function_arn,
-                    ),
-                    function_schema=bedrock.CfnAgent.FunctionSchemaProperty(
-                        functions=[
-                            # -- stop_instance (reversible, no confirmation) --
-                            bedrock.CfnAgent.FunctionProperty(
-                                name="stop_instance",
-                                description=(
-                                    "Stop (not terminate) an EC2 instance. "
-                                    "Reversible. Target must be "
-                                    "Environment=sandbox, AutoReap=true, "
-                                    "and LeaseExpires < today UTC."
-                                ),
-                                parameters={
-                                    "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="string",
-                                        description="EC2 Instance ID (e.g. i-0abc123def456).",
-                                        required=True,
-                                    ),
-                                },
-                                require_confirmation="DISABLED",
-                            ),
-                            # -- terminate_instance (irreversible, CONFIRMATION) --
-                            bedrock.CfnAgent.FunctionProperty(
-                                name="terminate_instance",
-                                description=(
-                                    "PERMANENTLY terminate an EC2 instance. "
-                                    "IRREVERSIBLE. Requires human "
-                                    "confirmation. Target must be "
-                                    "Environment=sandbox, AutoReap=true, "
-                                    "LeaseExpires < today UTC."
-                                ),
-                                parameters={
-                                    "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="string",
-                                        description="EC2 Instance ID to terminate.",
-                                        required=True,
-                                    ),
-                                },
-                                require_confirmation="ENABLED",
-                            ),
-                            # -- delete_volume (irreversible, CONFIRMATION) --
-                            bedrock.CfnAgent.FunctionProperty(
-                                name="delete_volume",
-                                description=(
-                                    "PERMANENTLY delete an unattached EBS "
-                                    "volume. IRREVERSIBLE. Requires human "
-                                    "confirmation. Target must be "
-                                    "Environment=sandbox, AutoReap=true, "
-                                    "LeaseExpires < today UTC."
-                                ),
-                                parameters={
-                                    "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
-                                        type="string",
-                                        description="EBS Volume ID (e.g. vol-0abc123).",
-                                        required=True,
-                                    ),
-                                },
-                                require_confirmation="ENABLED",
-                            ),
-                            # -- get_security_status (read-only) --
-                            bedrock.CfnAgent.FunctionProperty(
-                                name="get_security_status",
-                                description=(
-                                    "Returns remaining blast-radius quota "
-                                    "(deletions left in 24h window), "
-                                    "session lock status, and current "
-                                    "SECURITY_MODE."
-                                ),
-                                require_confirmation="DISABLED",
-                            ),
-                        ]
-                    ),
+                agent_resource_role_arn=agent_role.role_arn,
+                foundation_model=foundation_model_id,
+                instruction=agent_instruction,
+                idle_session_ttl_in_seconds=1800,
+                auto_prepare=True,
+                guardrail_configuration=bedrock.CfnAgent.GuardrailConfigurationProperty(
+                    guardrail_identifier=guardrail.attr_guardrail_id,
+                    guardrail_version=guardrail_version.attr_version,
                 ),
-            ],
-        )
+                action_groups=[
+                    # --- Action Group 1: Inventory (read-only) ---
+                    bedrock.CfnAgent.AgentActionGroupProperty(
+                        action_group_name="LeaseGuardInventory",
+                        description=(
+                            "Read-only FinOps inventory scanning and triage. "
+                            "No mutations."
+                        ),
+                        action_group_executor=bedrock.CfnAgent.ActionGroupExecutorProperty(
+                            lambda_=inventory_lambda.function_arn,
+                        ),
+                        function_schema=bedrock.CfnAgent.FunctionSchemaProperty(
+                            functions=[
+                                bedrock.CfnAgent.FunctionProperty(
+                                    name="triage_idle_resources",
+                                    description=(
+                                        "Scan and triage idle/expired EC2 "
+                                        "instances and unattached EBS volumes. "
+                                        "Returns estimated monthly waste, days "
+                                        "past/until lease expiry, snapshot "
+                                        "backup status, owner, and team. "
+                                        "Read-only — no mutations."
+                                    ),
+                                    parameters={
+                                        "filter_environment": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="string",
+                                            description=(
+                                                "Optional. Filter by Environment "
+                                                "tag value (e.g. sandbox)."
+                                            ),
+                                            required=False,
+                                        ),
+                                        "filter_owner": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="string",
+                                            description=(
+                                                "Optional. Filter by Owner tag."
+                                            ),
+                                            required=False,
+                                        ),
+                                        "include_snapshots": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="boolean",
+                                            description=(
+                                                "Whether to check for existing "
+                                                "EBS snapshots. Default true."
+                                            ),
+                                            required=False,
+                                        ),
+                                    },
+                                    require_confirmation="DISABLED",
+                                ),
+                            ]
+                        ),
+                    ),
+                    # --- Action Group 2: Reaper (read/write) ---
+                    bedrock.CfnAgent.AgentActionGroupProperty(
+                        action_group_name="LeaseGuardReaper",
+                        description=(
+                            "Sandbox resource lifecycle operations: stop, "
+                            "terminate, delete, and security status."
+                        ),
+                        action_group_executor=bedrock.CfnAgent.ActionGroupExecutorProperty(
+                            lambda_=reaper_lambda.function_arn,
+                        ),
+                        function_schema=bedrock.CfnAgent.FunctionSchemaProperty(
+                            functions=[
+                                # -- stop_instance (reversible, no confirmation) --
+                                bedrock.CfnAgent.FunctionProperty(
+                                    name="stop_instance",
+                                    description=(
+                                        "Stop (not terminate) an EC2 instance. "
+                                        "Reversible. Target must be "
+                                        "Environment=sandbox, AutoReap=true, "
+                                        "and LeaseExpires < today UTC."
+                                    ),
+                                    parameters={
+                                        "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="string",
+                                            description="EC2 Instance ID (e.g. i-0abc123def456).",
+                                            required=True,
+                                        ),
+                                    },
+                                    require_confirmation="DISABLED",
+                                ),
+                                # -- terminate_instance (irreversible, CONFIRMATION) --
+                                bedrock.CfnAgent.FunctionProperty(
+                                    name="terminate_instance",
+                                    description=(
+                                        "PERMANENTLY terminate an EC2 instance. "
+                                        "IRREVERSIBLE. Requires human "
+                                        "confirmation. Target must be "
+                                        "Environment=sandbox, AutoReap=true, "
+                                        "LeaseExpires < today UTC."
+                                    ),
+                                    parameters={
+                                        "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="string",
+                                            description="EC2 Instance ID to terminate.",
+                                            required=True,
+                                        ),
+                                    },
+                                    require_confirmation="ENABLED",
+                                ),
+                                # -- delete_volume (irreversible, CONFIRMATION) --
+                                bedrock.CfnAgent.FunctionProperty(
+                                    name="delete_volume",
+                                    description=(
+                                        "PERMANENTLY delete an unattached EBS "
+                                        "volume. IRREVERSIBLE. Requires human "
+                                        "confirmation. Target must be "
+                                        "Environment=sandbox, AutoReap=true, "
+                                        "LeaseExpires < today UTC."
+                                    ),
+                                    parameters={
+                                        "resource_id": bedrock.CfnAgent.ParameterDetailProperty(
+                                            type="string",
+                                            description="EBS Volume ID (e.g. vol-0abc123).",
+                                            required=True,
+                                        ),
+                                    },
+                                    require_confirmation="ENABLED",
+                                ),
+                                # -- get_security_status (read-only) --
+                                bedrock.CfnAgent.FunctionProperty(
+                                    name="get_security_status",
+                                    description=(
+                                        "Returns remaining blast-radius quota "
+                                        "(deletions left in 24h window), "
+                                        "session lock status, and current "
+                                        "SECURITY_MODE."
+                                    ),
+                                    require_confirmation="DISABLED",
+                                ),
+                            ]
+                        ),
+                    ),
+                ],
+            )
 
-        # Agent Alias (required for invocation)
-        agent_alias = bedrock.CfnAgentAlias(
-            self,
-            "AgentAlias",
-            agent_alias_name="live",
-            agent_id=agent.attr_agent_id,
-        )
-        agent_alias.add_resource_dependency(agent)
+            # Agent Alias (required for invocation)
+            agent_alias = bedrock.CfnAgentAlias(
+                self,
+                "AgentAlias",
+                agent_alias_name="live",
+                agent_id=agent.attr_agent_id,
+            )
+            agent_alias.add_resource_dependency(agent)
+
+            CfnOutput(self, "AgentId", value=agent.attr_agent_id,
+                      export_name="LeaseGuard-AgentId")
+            CfnOutput(self, "AgentAliasId", value=agent_alias.attr_agent_alias_id,
+                      export_name="LeaseGuard-AgentAliasId")
 
         # ═══════════════════════════════════════════════════════════════════
         # CloudFormation Outputs
         # ═══════════════════════════════════════════════════════════════════
-        CfnOutput(self, "AgentId", value=agent.attr_agent_id,
-                  export_name="LeaseGuard-AgentId")
-        CfnOutput(self, "AgentAliasId", value=agent_alias.attr_agent_alias_id,
-                  export_name="LeaseGuard-AgentAliasId")
         CfnOutput(self, "GuardrailId", value=guardrail.attr_guardrail_id,
                   export_name="LeaseGuard-GuardrailId")
+        CfnOutput(self, "GuardrailVersionOutput", value=guardrail_version.attr_version,
+                  export_name="LeaseGuard-GuardrailVersion")
         CfnOutput(self, "DynamoDBTable", value=audit_table.table_name,
                   export_name="LeaseGuard-AuditTable")
         CfnOutput(self, "SecurityMode", value=security_mode)
@@ -643,4 +648,8 @@ class LeaseGuardStack(Stack):
                   export_name="LeaseGuard-SingleArnRoleArn")
         CfnOutput(self, "ReaperOrchestratorRoleArn",
                   value=reaper_orchestrator_role.role_arn)
+        CfnOutput(self, "InventoryLambdaArn", value=inventory_lambda.function_arn,
+                  export_name="LeaseGuard-InventoryLambdaArn")
+        CfnOutput(self, "ReaperLambdaArn", value=reaper_lambda.function_arn,
+                  export_name="LeaseGuard-ReaperLambdaArn")
 
