@@ -1,0 +1,18 @@
+{
+  "app": "python3 app.py",
+  "context": {
+    "security_mode": "v2",
+    "foundation_model_id": "amazon.nova-pro-v1:0"
+  },
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "**/__pycache__",
+      "**/*.pyc",
+      "node_modules"
+    ]
+  }
+}
+

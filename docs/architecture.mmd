@@ -1,0 +1,79 @@
+flowchart TD
+    subgraph Client["Developer & FinOps Team"]
+        User["FinOps Engineer / Chat UI / CLI"]
+    end
+
+    subgraph L1["Layer 1: Amazon Bedrock Guardrails"]
+        G_Prompt["Input Filter: Prompt Attack (Strength HIGH)"]
+        G_Topic1["Denied Topic: ProductionOverride"]
+        G_Topic2["Denied Topic: InternalRecon"]
+        G_Sens["Sensitive Info Mask: Account ID & Secret Keys"]
+    end
+
+    subgraph Agent["Amazon Bedrock Managed Agent"]
+        BM_Agent["Bedrock Agent Engine<br/>Model: amazon.nova-pro-v1:0"]
+        SysPrompt["Deterministic Policy Contract System Prompt"]
+    end
+
+    subgraph L2["Layer 2: Human Gatekeeping"]
+        AC_Triage["triage_idle_resources<br/>Confirmation: DISABLED (Read-Only)"]
+        AC_Stop["stop_instance<br/>Confirmation: DISABLED (Reversible)"]
+        AC_Term["terminate_instance<br/>Confirmation: ENABLED (Irreversible)"]
+        AC_Del["delete_volume<br/>Confirmation: ENABLED (Irreversible)"]
+        AC_Sec["get_security_status<br/>Confirmation: DISABLED (Telemetry)"]
+    end
+
+    subgraph L3["Layer 3: Stateful Policy Engine & Active Intrusion Tripwire"]
+        Scanner["Inventory Scanner Lambda<br/>v2 Tag Sanitization & Cost Calc"]
+        Reaper["Resource Reaper Lambda<br/>Stateful Verification Pipeline"]
+        DDB[("DynamoDB: LeaseGuardAuditLedger<br/>PK: pk | SK: sk | TTL: expires_at")]
+        StepA["Step A: Check SESSION_LOCKED"]
+        StepB["Step B: Live AWS Tag & Lease Expiry Check"]
+        StepC["Step C: 24h Blast-Radius Quota (< 3 deletions)"]
+    end
+
+    subgraph L4["Layer 4: Dynamic Single-ARN STS Scoping"]
+        STS["AWS STS: AssumeRole<br/>Role: LeaseGuardSingleArnExecutionRole"]
+        Inline["Dynamic Inline Session Policy<br/>Exactly 1 Action + 1 Resource ARN<br/>TTL: 900 seconds"]
+    end
+
+    subgraph L5["Layer 5: Scoped IAM ABAC Hardware Boundary"]
+        ABAC["LeaseGuardSingleArnExecutionRole<br/>Allow: Environment=sandbox & AutoReap=true"]
+        DenyProd["Explicit Deny: Environment ∈ {prod, staging}"]
+        DenyTag["Explicit Deny: ec2:CreateTags, ec2:DeleteTags"]
+        DenyIAM["Explicit Deny: iam:*"]
+    end
+
+    subgraph Cloud["AWS Target Infrastructure"]
+        ProdEC2["prod-checkout-api<br/>(PROTECTED - Blocked at All Layers)"]
+        SandboxEC2["sandbox-poisoned-tag<br/>(Sanitized in v2)"]
+        SandboxEBS["sandbox-expired-vol-1..4<br/>(Quota & Confirmation Controlled)"]
+        ActiveEBS["sandbox-active-ml<br/>(Active Lease - Protected)"]
+    end
+
+    User --> G_Prompt
+    G_Prompt --> G_Topic1 --> G_Topic2 --> G_Sens --> BM_Agent
+    BM_Agent --> SysPrompt
+    BM_Agent --> L2
+    
+    AC_Triage --> Scanner
+    AC_Stop --> Reaper
+    AC_Term --> Reaper
+    AC_Del --> Reaper
+    AC_Sec --> Reaper
+
+    Scanner --> Cloud
+    Reaper --> StepA
+    StepA -->|"If Locked: 403 Block"| DDB
+    StepA --> StepB
+    StepB -->|"If Prod Tag: Trips Lockdown"| DDB
+    StepB --> StepC
+    StepC -->|"If >= 3: 429 Quota Block"| DDB
+    StepC --> STS
+    STS --> Inline
+    Inline --> ABAC
+    ABAC --> DenyProd
+    ABAC --> DenyTag
+    ABAC --> DenyIAM
+    DenyProd --> Cloud
+
