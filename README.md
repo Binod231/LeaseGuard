@@ -1,5 +1,11 @@
 # LeaseGuard: FinOps Triage & Autonomous Sandbox Cost-Reaper Agent
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://leaseguard-ktwmhatapenhsjthtifejs.streamlit.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![AWS: Bedrock](https://img.shields.io/badge/AWS-Amazon%20Bedrock-orange.svg)](https://aws.amazon.com/bedrock/)
+
+🚀 **Live Interactive Demo:** [https://leaseguard-ktwmhatapenhsjthtifejs.streamlit.app/](https://leaseguard-ktwmhatapenhsjthtifejs.streamlit.app/)
+
 An interactive FinOps copilot built on **Amazon Bedrock Managed Agents** that autonomously reasons over messy cloud resource signals (idle times, unattached EBS volumes, snapshot coverage, and ownership tags) while enforcing a **5-layer deterministic security fence**.
 
 ---
